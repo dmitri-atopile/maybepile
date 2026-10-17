@@ -51,12 +51,12 @@ fn unifyableTypes(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
 
 fn findParameter(name: ast.Variable, obj: ast.Object) TypeError!ast.Parameter {
     for (obj.public_parameters) |param| {
-        if (std.mem.eql(u8, name, param[0])) {
+        if (std.mem.eql(u8, name, param.name)) {
             return param;
         }
     }
     for (obj.private_parameters) |param| {
-        if (std.mem.eql(u8, name, param[0])) {
+        if (std.mem.eql(u8, name, param.name)) {
             return param;
         }
     }
@@ -64,12 +64,12 @@ fn findParameter(name: ast.Variable, obj: ast.Object) TypeError!ast.Parameter {
 }
 
 fn lookupVariablePathType(vp: ast.VariablePath, obj: ast.Object, env: ast.Program) TypeError!ast.Type {
-    // std.debug.print("next variable: {s}\n", .{vp[0]});
     if (vp.len == 0) {
         return .{.object = obj.name};
     } else {
+        // std.debug.print("next variable: {s}\n", .{vp[0]});
         const param = try findParameter(vp[0], obj);
-        switch (param[1]) {
+        switch (param.type) {
             .number => {
                 if (vp.len == 1) {
                     // if do not need to desend any further into the path
@@ -96,7 +96,7 @@ fn lookupValueType(v: ast.Value, obj: ast.Object, env: ast.Program) TypeError!as
 
 fn typecheckParameters(parameters: []const (ast.Parameter), env: ast.Program) TypeError!void {
     for (parameters) |param| {
-        switch (param[1]) {
+        switch (param.type) {
             .number => {},
             .object => |object_type| {
                 _ = try findObject(object_type, env);
@@ -109,6 +109,7 @@ fn typecheckConstraints(obj: ast.Object, env: ast.Program) TypeError!void {
     for (obj.constraints) |c| {
         switch (c) {
             .equals => |args| {
+                // std.debug.print("t0: {}, t1: {}", .{args[0], args[1]});
                 const t0 = try lookupValueType(args[0], obj, env);
                 const t1 = try lookupValueType(args[1], obj, env);
                 if (!try unifyableTypes(t0, t1, env)) {
@@ -129,8 +130,8 @@ fn typecheckTraits(obj: ast.Object, env: ast.Program) TypeError!void {
     for (obj.traits) |trait| {
         const trait_obj = try findObject(trait, env);
         for (trait_obj.public_parameters) |public_param| {
-            const obj_param_type = try lookupVariablePathType(&.{public_param[0]}, obj, env);
-            if (ast.types_equal(public_param[1], obj_param_type)) {
+            const obj_param_type = try lookupVariablePathType(&.{public_param.name}, obj, env);
+            if (!ast.types_equal(public_param.type, obj_param_type)) {
                 return TypeError.UnmatchingTraitType;
             }
         }
@@ -158,13 +159,26 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-test "lookup junction id" {
+test "lookup resistor junction" {
     try expect(ast.types_equal(
-        try lookupVariablePathType(&.{"id"}, examples.junction, examples.resistor_square_program),
-        .{.number = {}}
+        try lookupVariablePathType(&.{"0"}, examples.resistor, examples.resistor_square_program),
+        .{.object = "Junction"}
     ));
 }
 
 test "resistor square example program typechecks" {
     try typecheckProgram(examples.resistor_square_program);
+}
+
+test "small resistor lines typecheck" {
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    const one_resistor_line = try examples.n_resistor_line(allocator, 1);
+    try typecheckProgram(&.{examples.junction, examples.resistor, one_resistor_line});
+
+    const five_resistor_line = try examples.n_resistor_line(allocator, 5);
+    try typecheckProgram(&.{examples.junction, examples.resistor, five_resistor_line});
+
 }

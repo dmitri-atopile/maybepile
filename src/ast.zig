@@ -45,7 +45,7 @@ pub const Constraint = union(enum) {
 };
 
 // parameters
-pub const Parameter = struct {Variable, Type};
+pub const Parameter = struct {name: Variable, type: Type};
 
 // object definitions
 pub const Object = struct {
