@@ -54,28 +54,40 @@ pub const resistor_square: ast.Object = .{
     .traits = &.{}
 };
 
-pub fn n_resistor_line(allocator: std.mem.Allocator, n: u64) !ast.Object {
+pub fn nResistorLine(allocator: std.mem.Allocator, n: u64) !ast.Object {
 
     var parameters: std.ArrayList(ast.Parameter) = .empty;
+
     var constraints: std.ArrayList(ast.Constraint) = .empty;
 
-    // try parameters.append(allocator, .{"r0", .{.object = "Resistor"}});
+    try parameters.append(allocator, .{.name = "r0", .type = .{.object = "Resistor"}});
+    
+    try constraints.append(allocator, .{.equals = .{.{.path = &.{"0"}}, .{.path = &.{"r0", "0"}}}});
+    try constraints.append(allocator, .{.equals = .{.{.path = &.{"r0", "resistance"}}, .{.path = &.{"resistance"}}}});
 
-    for (0..n) |i| {
+    for (1..n) |i| {
         const resistor_name = try std.fmt.allocPrint(allocator, "r{d}", .{i});
-        // std.debug.print("resistor name: {s}\n", .{resistor_name});
+
         try parameters.append(allocator, .{.name = resistor_name, .type = .{.object = "Resistor"}});
 
-        // const next_resistor_name = try std.fmt.allocPrint(allocator, "r{d}", .{i + 1});
-        // try constraints.append(allocator, .{.equals = .{.{.path = &.{resistor_name, "1"}}, .{.path = &.{next_resistor_name, "0"}}}});
+        const prev_resistor_name = try std.fmt.allocPrint(allocator, "r{d}", .{i - 1});
+        try constraints.append(allocator, .{.equals = .{
+            .{.path = try allocator.dupe(ast.Variable, &.{prev_resistor_name, "1"})},
+            .{.path = try allocator.dupe(ast.Variable, &.{resistor_name, "0"})}
+        }});
 
-        // const resistance_name = try std.fmt.allocPrint(allocator, "r{d}.resistance", .{i});
-        // try constraints.append(allocator, .{.equals = .{.{.path = &.{"resistance"}}, .{.path = &.{resistance_name}}}});
+        try constraints.append(allocator, .{.equals = .{
+            .{.path = &.{"resistance"}},
+            .{.path = try allocator.dupe(ast.Variable, &.{resistor_name, "resistance"})}
+        }});
     }
 
-    try constraints.append(allocator, .{.equals = .{.{.path = &.{"0"}}, .{.path = &.{"r0", "0"}}}});
-    // const last_resistor_name = try std.fmt.allocPrint(allocator, "r{d}", .{n});
-    // try constraints.append(allocator, .{.equals = .{.{.path = &.{last_resistor_name, "1"}}, .{.path = &.{"1"}}}});
+    const last_resistor_name = try std.fmt.allocPrint(allocator, "r{d}", .{n - 1});
+    try constraints.append(allocator, .{.equals = .{
+        .{.path = try allocator.dupe(ast.Variable, &.{last_resistor_name, "1"})},
+        .{.path = &.{"1"}}
+    }});
+    // try constraints.append(allocator, .{.equals = .{.{.path = &.{"r0", "1"}}, .{.path = &.{"1"}}}});
 
     const resistor_line: ast.Object = .{
         .name = try std.fmt.allocPrint(allocator, "{d}ResistorLine", .{n}),

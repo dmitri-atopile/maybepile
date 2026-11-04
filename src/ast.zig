@@ -10,7 +10,7 @@ pub const Type = union(enum) {
     object: ObjectType
 };
 
-pub fn types_equal(t0: Type, t1: Type) bool {
+pub fn typesEqual(t0: Type, t1: Type) bool {
     switch(t0) {
         .number => switch(t1) {
             .number => return true,
@@ -67,12 +67,12 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-test "types_equal" {
-    try expect(types_equal(.{.number = {}}, .{.number = {}}));
-    try expect(types_equal(.{.object = "Resistor"}, .{.object = "Resistor"}));
+test "typesEqual" {
+    try expect(typesEqual(.{.number = {}}, .{.number = {}}));
+    try expect(typesEqual(.{.object = "Resistor"}, .{.object = "Resistor"}));
 
-    try expect(!types_equal(.{.number = {}}, .{.object = "Resistor"}));
-    try expect(!types_equal(.{.object = "Resistor"}, .{.number = {}}));
-    try expect(!types_equal(.{.object = "Resistor"}, .{.object = "Transistor"}));
+    try expect(!typesEqual(.{.number = {}}, .{.object = "Resistor"}));
+    try expect(!typesEqual(.{.object = "Resistor"}, .{.number = {}}));
+    try expect(!typesEqual(.{.object = "Resistor"}, .{.object = "Transistor"}));
 }
 

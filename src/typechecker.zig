@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const examples = @import("examples.zig");
 
 const TypeError = error{
     NumberIsNotObject,
@@ -23,7 +22,7 @@ fn findObject(object_type: ast.ObjectType, env: ast.Program) TypeError!ast.Objec
 
 
 fn isSubtype(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
-    if (ast.types_equal(t0, t1)) {
+    if (ast.typesEqual(t0, t1)) {
         return true;
     } else if (t0 == .number and t1 == .object) {
         return false;
@@ -50,6 +49,7 @@ fn unifyableTypes(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
 }
 
 fn findParameter(name: ast.Variable, obj: ast.Object) TypeError!ast.Parameter {
+    // std.debug.print("{s} in {s}\n", .{name, obj.name});
     for (obj.public_parameters) |param| {
         if (std.mem.eql(u8, name, param.name)) {
             return param;
@@ -67,7 +67,6 @@ fn lookupVariablePathType(vp: ast.VariablePath, obj: ast.Object, env: ast.Progra
     if (vp.len == 0) {
         return .{.object = obj.name};
     } else {
-        // std.debug.print("next variable: {s}\n", .{vp[0]});
         const param = try findParameter(vp[0], obj);
         switch (param.type) {
             .number => {
@@ -89,8 +88,12 @@ fn lookupVariablePathType(vp: ast.VariablePath, obj: ast.Object, env: ast.Progra
 
 fn lookupValueType(v: ast.Value, obj: ast.Object, env: ast.Program) TypeError!ast.Type {
     switch(v) {
-        .number => return .{.number = {}},
-        .path => |variable_path| return try lookupVariablePathType(variable_path, obj, env)
+        .number => {
+            return .{.number = {}};
+        },
+        .path => |variable_path| {
+            return try lookupVariablePathType(variable_path, obj, env);
+        }
     }
 }
 
@@ -109,11 +112,9 @@ fn typecheckConstraints(obj: ast.Object, env: ast.Program) TypeError!void {
     for (obj.constraints) |c| {
         switch (c) {
             .equals => |args| {
-                // std.debug.print("t0: {}, t1: {}", .{args[0], args[1]});
                 const t0 = try lookupValueType(args[0], obj, env);
                 const t1 = try lookupValueType(args[1], obj, env);
                 if (!try unifyableTypes(t0, t1, env)) {
-                    // std.debug.print("non unifyable types: {}, {}\n", .{t0, t1});
                     return TypeError.NonUnifyableTypes;
                 }
             },
@@ -131,7 +132,7 @@ fn typecheckTraits(obj: ast.Object, env: ast.Program) TypeError!void {
         const trait_obj = try findObject(trait, env);
         for (trait_obj.public_parameters) |public_param| {
             const obj_param_type = try lookupVariablePathType(&.{public_param.name}, obj, env);
-            if (!ast.types_equal(public_param.type, obj_param_type)) {
+            if (!ast.typesEqual(public_param.type, obj_param_type)) {
                 return TypeError.UnmatchingTraitType;
             }
         }
@@ -153,6 +154,7 @@ fn typecheckProgram(program: ast.Program) TypeError!void {
 
 // tests
 
+const examples = @import("examples.zig");
 const expect = std.testing.expect;
 
 test {
@@ -160,7 +162,7 @@ test {
 }
 
 test "lookup resistor junction" {
-    try expect(ast.types_equal(
+    try expect(ast.typesEqual(
         try lookupVariablePathType(&.{"0"}, examples.resistor, examples.resistor_square_program),
         .{.object = "Junction"}
     ));
@@ -172,13 +174,23 @@ test "resistor square example program typechecks" {
 
 test "small resistor lines typecheck" {
 
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+
+    const one_resistor_line = try examples.nResistorLine(allocator, 1);
+
+    try typecheckProgram(&.{examples.junction, examples.resistor, one_resistor_line});
+
+    const five_resistor_line = try examples.nResistorLine(allocator, 5);
+    try typecheckProgram(&.{examples.junction, examples.resistor, five_resistor_line});
+
+}
+
+test "big resistor line typechecks" {
+
     var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const one_resistor_line = try examples.n_resistor_line(allocator, 1);
-    try typecheckProgram(&.{examples.junction, examples.resistor, one_resistor_line});
-
-    const five_resistor_line = try examples.n_resistor_line(allocator, 5);
-    try typecheckProgram(&.{examples.junction, examples.resistor, five_resistor_line});
-
+    const big_resistor_line = try examples.nResistorLine(allocator, 250000);
+    try typecheckProgram(&.{examples.junction, examples.resistor, big_resistor_line});
 }
