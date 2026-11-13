@@ -1,7 +1,7 @@
-
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const typechecker = @import("typechecker.zig");
 
 // substitutions
 
@@ -23,13 +23,16 @@ const VariablePathContext = struct {
 };
 
 pub const Substitution = struct {
+    allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     map: std.HashMap(ast.VariablePath, ast.Value, VariablePathContext, std.hash_map.default_max_load_percentage),
 
-    pub fn init(parent_allocator: std.mem.Allocator) @This() {
+    // core operations
 
+    pub fn init(parent_allocator: std.mem.Allocator) @This() {
         var self: @This() = undefined;
 
+        self.allocator = parent_allocator;
         self.arena = .init(parent_allocator);
         self.map = .init(parent_allocator);
 
@@ -46,7 +49,7 @@ pub const Substitution = struct {
         new.map = .init(parent_allocator);
 
         var new_allocated_paths: std.HashMap(ast.VariablePath, ast.VariablePath, VariablePathContext, std.hash_map.default_max_load_percentage) = .init(parent_allocator);
-        
+
         var self_map_iterator = self.map.iterator();
         while (self_map_iterator.next()) |entry| {
             var p_key: ast.VariablePath = undefined;
@@ -62,13 +65,13 @@ pub const Substitution = struct {
                 },
                 .path => |p| {
                     if (new_allocated_paths.get(p)) |p_new| {
-                        try new.map.put(p_key, .{.path = p_new});
+                        try new.map.put(p_key, .{ .path = p_new });
                     } else {
                         const p_new = try ast.dupeVariablePath(new.arena.allocator(), p);
                         try new_allocated_paths.put(p_new, p_new);
-                        try new.map.put(p_key, .{.path = p_new});
+                        try new.map.put(p_key, .{ .path = p_new });
                     }
-                }
+                },
             }
         }
 
@@ -98,12 +101,12 @@ pub const Substitution = struct {
                         try self.map.put(vp, v_deep);
                         return v_deep;
                     }
-                }
+                },
             }
         } else {
             // by default, map variable path to itself
             const vp_internal = try ast.dupeVariablePath(self.arena.allocator(), vp);
-            const v: ast.Value = .{.path = vp_internal};
+            const v: ast.Value = .{ .path = vp_internal };
             try self.map.put(vp_internal, v);
             return v;
         }
@@ -118,61 +121,108 @@ pub const Substitution = struct {
         }
     }
 
+    // unification
+
+    fn normalize(s: *@This(), v: ast.Value, obj: ast.Object, env: ast.Program) error{OutOfMemory}!ast.Value {
+        // looks up value if it's a base or concrete value
+        // otherwise just returns path
+        switch (v) {
+            .number => {
+                // nothing to look up
+                return v;
+            },
+            .path => |p| {
+                const t = typechecker.lookupVariablePathType(p, obj, env) catch unreachable;
+                switch (t) {
+                    .number => {
+                        // base type
+                        return try s.lookup(p);
+                    },
+                    .object => |name| {
+                        const o = typechecker.findObject(name, env) catch unreachable;
+                        if (o.public_parameters.len > 0) {
+                            // not base type
+                            return v;
+                        } else {
+                            // base type
+                            return s.lookup(p);
+                        }
+                    },
+                }
+            },
+        }
+    }
+
+    pub fn unify(s: *@This(), v_raw0: ast.Value, v_raw1: ast.Value, obj: ast.Object, env: ast.Program) error{OutOfMemory}!bool {
+        const v0 = try s.normalize(v_raw0, obj, env);
+        const v1 = try s.normalize(v_raw1, obj, env);
+
+        // std.debug.print("v0: {}\n", .{v0});
+        // std.debug.print("v1: {}\n", .{v1});
+
+        switch (v0) {
+            .number => |n0| {
+                switch (v1) {
+                    .number => |n1| {
+                        return n0 == n1;
+                    },
+                    .path => |p1| {
+                        try s.update(p1, v0);
+                        return true;
+                    },
+                }
+            },
+            .path => |p0| {
+                switch (v1) {
+                    .number => {
+                        try s.update(p0, v1);
+                        return true;
+                    },
+                    .path => |p1| {
+                        const t0 = typechecker.lookupVariablePathType(p0, obj, env) catch unreachable;
+                        const t1 = typechecker.lookupVariablePathType(p1, obj, env) catch unreachable;
+
+                        if (typechecker.isSubtype(t0, t1, env) catch unreachable) {
+                            // t0 is subtype of t1
+                            // so we use public members of t1
+
+                            const obj_next = typechecker.findObject(t1.object, env) catch unreachable;
+                            for (obj_next.public_parameters) |param| {
+                                var temp_arena: std.heap.ArenaAllocator = .init(s.allocator);
+                                defer temp_arena.deinit();
+
+                                const p0_ext = try std.mem.concat(temp_arena.allocator(), []const u8, &.{ p0, &.{param.name} });
+                                const p1_ext = try std.mem.concat(temp_arena.allocator(), []const u8, &.{ p1, &.{param.name} });
+                                if (try s.unify(.{ .path = p0_ext }, .{ .path = p1_ext }, obj, env)) {
+                                    continue;
+                                } else {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        } else if (typechecker.isSubtype(t1, t0, env) catch unreachable) {
+                            // p1 is subtype of p0 (guaranteed by typechecker)
+                            return try s.unify(v1, v0, obj, env); // swap arguments to avoid duplicate code
+                        } else {
+                            unreachable;
+                        }
+                    },
+                }
+            },
+        }
+    }
 };
 
 // substitution stream
 
 pub const SubstitutionStream = std.ArrayList(Substitution);
 
-// unifcation
-
-fn unify(
-    vp0: ast.VariablePath,
-    vp1: ast.VariablePath,
-    s: Substitution
-) ?Substitution {
-    const v0 = s.lookup(vp0);
-    const v1 = s.lookup(vp1);
-
-    // might be better to do v0 == v1, then only switch on one of them
-
-    switch (v0) {
-        .number => |n0| {
-            switch (v1) {
-                .number => |n1| {
-                    if (n0 == n1) {
-                        return s;
-                    } else {
-                        return null;
-                    }
-                },
-                .path => |p1| {
-                    s.updateAll(p1, v0);
-                    return s;
-                }
-            }
-        },
-        .path => |p0| {
-            switch (v1) {
-                .number => {
-                    s.updateAll(p0, v1);
-                    return s;
-                },
-                .path => {
-                    s.updateAll(p0, v1);
-                    return s;
-                }
-            }
-        }
-
-    }
-
-}
-
 // tests
 
 const expectEqual = std.testing.expectEqual;
 const expect = std.testing.expect;
+
+const examples = @import("examples.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -182,37 +232,45 @@ test {
 test "VariablePathContext" {
     const vpc: VariablePathContext = .{};
 
-    try expectEqual(
-        vpc.hash(&.{"a", "b", "c"}),
-        vpc.hash(&.{"a", "b", "c"})
-    );
+    try expectEqual(vpc.hash(&.{ "a", "b", "c" }), vpc.hash(&.{ "a", "b", "c" }));
 
-    try expect(vpc.hash(&.{"a", "b", "c"}) != vpc.hash(&.{"x", "y", "z"}));
+    try expect(vpc.hash(&.{ "a", "b", "c" }) != vpc.hash(&.{ "x", "y", "z" }));
 }
 
-test "Substitution" {
+test "Substitution init,update,lookup,dupe" {
     var s0: Substitution = .init(std.testing.allocator);
 
-    try expect(ast.valuesEqual(try s0.lookup(&.{"a", "b", "c"}), try s0.lookup(&.{"a", "b", "c"})));
-    try expect(!ast.valuesEqual(try s0.lookup(&.{"a", "b", "c"}), try s0.lookup(&.{"x", "y", "z"})));
-    
-    try s0.update(&.{"a", "b", "c"}, .{.number = 5});
-    try expect(!ast.valuesEqual(try s0.lookup(&.{"a", "b", "c"}), try s0.lookup(&.{"x", "y", "z"})));
+    try expect(ast.valuesEqual(try s0.lookup(&.{ "a", "b", "c" }), try s0.lookup(&.{ "a", "b", "c" })));
+    try expect(!ast.valuesEqual(try s0.lookup(&.{ "a", "b", "c" }), try s0.lookup(&.{ "x", "y", "z" })));
 
-    try s0.update(&.{"x", "y", "z"}, .{.number = 5});
-    try expect(ast.valuesEqual(try s0.lookup(&.{"a", "b", "c"}), try s0.lookup(&.{"x", "y", "z"})));
+    try s0.update(&.{ "a", "b", "c" }, .{ .number = 5 });
+    try expect(!ast.valuesEqual(try s0.lookup(&.{ "a", "b", "c" }), try s0.lookup(&.{ "x", "y", "z" })));
 
-    try s0.update(&.{"a", "b", "c"}, .{.path = &.{"d", "e", "f"}});
-    try expect(ast.valuesEqual(try s0.lookup(&.{"a", "b", "c"}), try s0.lookup(&.{"d", "e", "f"})));
+    try s0.update(&.{ "x", "y", "z" }, .{ .number = 5 });
+    try expect(ast.valuesEqual(try s0.lookup(&.{ "a", "b", "c" }), try s0.lookup(&.{ "x", "y", "z" })));
 
-    try s0.update(&.{"d", "e", "f"}, .{.number = 6});
-    try expect(ast.valuesEqual(try s0.lookup(&.{"a", "b", "c"}), try s0.lookup(&.{"d", "e", "f"})));
+    try s0.update(&.{ "a", "b", "c" }, .{ .path = &.{ "d", "e", "f" } });
+    try expect(ast.valuesEqual(try s0.lookup(&.{ "a", "b", "c" }), try s0.lookup(&.{ "d", "e", "f" })));
+
+    try s0.update(&.{ "d", "e", "f" }, .{ .number = 6 });
+    try expect(ast.valuesEqual(try s0.lookup(&.{ "a", "b", "c" }), try s0.lookup(&.{ "d", "e", "f" })));
 
     var s1 = try s0.dupe(std.testing.allocator);
     defer s1.deinit();
 
     s0.deinit();
 
-    try expect(ast.valuesEqual(try s1.lookup(&.{"a", "b", "c"}), try s1.lookup(&.{"d", "e", "f"})));
+    try expect(ast.valuesEqual(try s1.lookup(&.{ "a", "b", "c" }), try s1.lookup(&.{ "d", "e", "f" })));
+}
 
+test "Substitution unify" {
+    var s: Substitution = .init(std.testing.allocator);
+    defer s.deinit();
+
+    try expect(try s.unify(.{ .number = 5.0 }, .{ .number = 5.0 }, examples.f, examples.abcdef_program));
+    try expect(!try s.unify(.{ .number = 5.0 }, .{ .number = 6.0 }, examples.f, examples.abcdef_program));
+    try expect(try s.unify(.{ .path = &.{ "a", "b", "c" } }, .{ .number = 5.0 }, examples.f, examples.abcdef_program));
+    try expect(!try s.unify(.{ .path = &.{ "a", "b", "c" } }, .{ .number = 6.0 }, examples.f, examples.abcdef_program));
+    try expect(try s.unify(.{ .path = &.{ "a", "b", "c" } }, .{ .path = &.{ "d", "e", "c" } }, examples.f, examples.abcdef_program));
+    try expect(!try s.unify(.{ .number = 6.0 }, .{ .path = &.{ "d", "e", "c" } }, examples.f, examples.abcdef_program));
 }
