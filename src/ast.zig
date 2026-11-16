@@ -73,7 +73,7 @@ pub fn valuesEqual(v0: Value, v1: Value) bool {
 }
 
 // constraints
-pub const Constraint = union(enum) { equals: struct { Value, Value }, gennum: Value };
+pub const Constraint = union(enum) { equals: struct { Value, Value } };
 
 // parameters
 pub const Parameter = struct { name: Variable, type: Type };

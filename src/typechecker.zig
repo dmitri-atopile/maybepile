@@ -110,11 +110,6 @@ fn typecheckConstraints(obj: ast.Object, env: ast.Program) TypeError!void {
                     return TypeError.NonUnifyableTypes;
                 }
             },
-            .gennum => |val| {
-                if (!try isSubtype(try lookupValueType(val, obj, env), .{ .number = {} }, env)) {
-                    return TypeError.NonNumberType;
-                }
-            },
         }
     }
 }
