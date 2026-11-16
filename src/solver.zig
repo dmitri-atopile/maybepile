@@ -26,6 +26,7 @@ pub const Substitution = struct {
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     map: std.HashMap(ast.VariablePath, ast.Value, VariablePathContext, std.hash_map.default_max_load_percentage),
+    node: std.DoublyLinkedList.Node,
 
     // core operations
 
@@ -118,6 +119,13 @@ pub const Substitution = struct {
         } else {
             const vp_internal = try ast.dupeVariablePath(self.arena.allocator(), vp);
             try self.map.put(vp_internal, v);
+        }
+    }
+
+    pub fn merge(self: *@This(), other: @This()) error{OutOfMemory}!void {
+        var other_map_iterator = other.map.iterator();
+        while (other_map_iterator.next()) |entry| {
+            try self.update(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
@@ -215,7 +223,11 @@ pub const Substitution = struct {
 
 // substitution stream
 
-pub const SubstitutionStream = std.ArrayList(Substitution);
+pub const SubstitutionStream = struct {
+    node: std.DoublyLinkedList,
+
+};
+
 
 // tests
 
@@ -261,6 +273,22 @@ test "Substitution init,update,lookup,dupe" {
     s0.deinit();
 
     try expect(ast.valuesEqual(try s1.lookup(&.{ "a", "b", "c" }), try s1.lookup(&.{ "d", "e", "f" })));
+}
+
+test "Substitution merge" {
+
+    var s0: Substitution = .init(std.testing.allocator);
+    defer s0.deinit();
+
+    var s1: Substitution = .init(std.testing.allocator);
+    defer s1.deinit();
+
+    try s0.update(&.{"a"}, .{.number = 5});
+    try s1.update(&.{"b"}, .{.number = 6});
+
+    try s0.merge(s1);
+
+    try expect(ast.valuesEqual(try s0.lookup(&.{"b"}), .{.number = 6}));
 }
 
 test "Substitution unify" {
