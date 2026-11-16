@@ -84,9 +84,73 @@ pub const Object = struct { name: ObjectType, public_parameters: []const Paramet
 // programs
 pub const Program = []const (Object);
 
+// helper functions
+
+const LookupError = error{VariablePathNotFound, NumberIsNotObject, ObjectNotFound};
+
+pub fn findObject(object_type: ObjectType, env: Program) LookupError!Object {
+    for (env) |obj| {
+        if (std.mem.eql(u8, object_type, obj.name)) {
+            return obj;
+        }
+    }
+    return LookupError.ObjectNotFound;
+}
+
+fn findParameter(name: Variable, obj: Object) LookupError!Parameter {
+    // std.debug.print("{s} in {s}\n", .{name, obj.name});
+    for (obj.public_parameters) |param| {
+        if (std.mem.eql(u8, name, param.name)) {
+            return param;
+        }
+    }
+    for (obj.private_parameters) |param| {
+        if (std.mem.eql(u8, name, param.name)) {
+            return param;
+        }
+    }
+    return LookupError.VariablePathNotFound;
+}
+
+pub fn lookupVariablePathType(vp: VariablePath, obj: Object, env: Program) LookupError!Type {
+    if (vp.len == 0) {
+        return .{ .object = obj.name };
+    } else {
+        const param = try findParameter(vp[0], obj);
+        switch (param.type) {
+            .number => {
+                if (vp.len == 1) {
+                    // if do not need to desend any further into the path
+                    return .{ .number = {} };
+                } else {
+                    // otherwise cannot descend further into the path
+                    return LookupError.NumberIsNotObject;
+                }
+            },
+            .object => |object_type| {
+                return try lookupVariablePathType(vp[1..], try findObject(object_type, env), env);
+            },
+        }
+        // return LookupError.VariablePathNotFound;
+    }
+}
+
+pub fn lookupValueType(v: Value, obj: Object, env: Program) LookupError!Type {
+    switch (v) {
+        .number => {
+            return .{ .number = {} };
+        },
+        .path => |variable_path| {
+            return try lookupVariablePathType(variable_path, obj, env);
+        },
+    }
+}
+
 // tests
 
 const expect = std.testing.expect;
+
+const examples = @import("examples.zig");
 
 test {
     std.testing.refAllDecls(@This());
@@ -114,4 +178,8 @@ test "valuesEqual" {
     try expect(!valuesEqual(.{ .number = 5.0 }, .{ .path = &.{ "a", "b", "c" } }));
     try expect(!valuesEqual(.{ .path = &.{ "a", "b", "c" } }, .{ .number = 5.0 }));
     try expect(!valuesEqual(.{ .path = &.{ "a", "b", "c" } }, .{ .path = &.{ "a", "b", "d" } }));
+}
+
+test "lookup resistor junction" {
+    try expect(typesEqual(try lookupVariablePathType(&.{"0"}, examples.resistor, examples.resistor_square_program), .{ .object = "Junction" }));
 }

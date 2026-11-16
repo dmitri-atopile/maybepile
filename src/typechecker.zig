@@ -4,14 +4,6 @@ const ast = @import("ast.zig");
 
 const TypeError = error{ NumberIsNotObject, VariablePathNotFound, ObjectNotFound, NonUnifyableTypes, UnmatchingTraitType, NonNumberType };
 
-pub fn findObject(object_type: ast.ObjectType, env: ast.Program) TypeError!ast.Object {
-    for (env) |obj| {
-        if (std.mem.eql(u8, object_type, obj.name)) {
-            return obj;
-        }
-    }
-    return TypeError.ObjectNotFound;
-}
 
 pub fn isSubtype(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
     if (ast.typesEqual(t0, t1)) {
@@ -24,7 +16,7 @@ pub fn isSubtype(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
         switch (t0) {
             .number => unreachable,
             .object => |object_type| {
-                const obj = try findObject(object_type, env);
+                const obj = try ast.findObject(object_type, env);
                 for (obj.traits) |trait| {
                     if (try isSubtype(.{ .object = trait }, t1, env)) {
                         return true;
@@ -40,61 +32,12 @@ fn unifyableTypes(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
     return (try isSubtype(t0, t1, env)) or (try isSubtype(t1, t0, env));
 }
 
-fn findParameter(name: ast.Variable, obj: ast.Object) TypeError!ast.Parameter {
-    // std.debug.print("{s} in {s}\n", .{name, obj.name});
-    for (obj.public_parameters) |param| {
-        if (std.mem.eql(u8, name, param.name)) {
-            return param;
-        }
-    }
-    for (obj.private_parameters) |param| {
-        if (std.mem.eql(u8, name, param.name)) {
-            return param;
-        }
-    }
-    return TypeError.VariablePathNotFound;
-}
-
-pub fn lookupVariablePathType(vp: ast.VariablePath, obj: ast.Object, env: ast.Program) TypeError!ast.Type {
-    if (vp.len == 0) {
-        return .{ .object = obj.name };
-    } else {
-        const param = try findParameter(vp[0], obj);
-        switch (param.type) {
-            .number => {
-                if (vp.len == 1) {
-                    // if do not need to desend any further into the path
-                    return .{ .number = {} };
-                } else {
-                    // otherwise cannot descend further into the path
-                    return TypeError.NumberIsNotObject;
-                }
-            },
-            .object => |object_type| {
-                return try lookupVariablePathType(vp[1..], try findObject(object_type, env), env);
-            },
-        }
-        // return TypeError.VariablePathNotFound;
-    }
-}
-
-fn lookupValueType(v: ast.Value, obj: ast.Object, env: ast.Program) TypeError!ast.Type {
-    switch (v) {
-        .number => {
-            return .{ .number = {} };
-        },
-        .path => |variable_path| {
-            return try lookupVariablePathType(variable_path, obj, env);
-        },
-    }
-}
-
 fn typecheckParameters(parameters: []const (ast.Parameter), env: ast.Program) TypeError!void {
     for (parameters) |param| {
         switch (param.type) {
             .number => {},
             .object => |object_type| {
-                _ = try findObject(object_type, env);
+                _ = try ast.findObject(object_type, env);
             },
         }
     }
@@ -104,8 +47,8 @@ fn typecheckConstraints(obj: ast.Object, env: ast.Program) TypeError!void {
     for (obj.constraints) |c| {
         switch (c) {
             .equals => |args| {
-                const t0 = try lookupValueType(args[0], obj, env);
-                const t1 = try lookupValueType(args[1], obj, env);
+                const t0 = try ast.lookupValueType(args[0], obj, env);
+                const t1 = try ast.lookupValueType(args[1], obj, env);
                 if (!try unifyableTypes(t0, t1, env)) {
                     return TypeError.NonUnifyableTypes;
                 }
@@ -116,9 +59,9 @@ fn typecheckConstraints(obj: ast.Object, env: ast.Program) TypeError!void {
 
 fn typecheckTraits(obj: ast.Object, env: ast.Program) TypeError!void {
     for (obj.traits) |trait| {
-        const trait_obj = try findObject(trait, env);
+        const trait_obj = try ast.findObject(trait, env);
         for (trait_obj.public_parameters) |public_param| {
-            const obj_param_type = try lookupVariablePathType(&.{public_param.name}, obj, env);
+            const obj_param_type = try ast.lookupVariablePathType(&.{public_param.name}, obj, env);
             if (!ast.typesEqual(public_param.type, obj_param_type)) {
                 return TypeError.UnmatchingTraitType;
             }
@@ -146,10 +89,6 @@ const expect = std.testing.expect;
 
 test {
     std.testing.refAllDecls(@This());
-}
-
-test "lookup resistor junction" {
-    try expect(ast.typesEqual(try lookupVariablePathType(&.{"0"}, examples.resistor, examples.resistor_square_program), .{ .object = "Junction" }));
 }
 
 test "resistor square example program typechecks" {

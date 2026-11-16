@@ -140,14 +140,14 @@ pub const Substitution = struct {
                 return v;
             },
             .path => |p| {
-                const t = typechecker.lookupVariablePathType(p, obj, env) catch unreachable;
+                const t = ast.lookupVariablePathType(p, obj, env) catch unreachable;
                 switch (t) {
                     .number => {
                         // base type
                         return try s.lookup(p);
                     },
                     .object => |name| {
-                        const o = typechecker.findObject(name, env) catch unreachable;
+                        const o = ast.findObject(name, env) catch unreachable;
                         if (o.public_parameters.len > 0) {
                             // not base type
                             return v;
@@ -187,14 +187,14 @@ pub const Substitution = struct {
                         return true;
                     },
                     .path => |p1| {
-                        const t0 = typechecker.lookupVariablePathType(p0, obj, env) catch unreachable;
-                        const t1 = typechecker.lookupVariablePathType(p1, obj, env) catch unreachable;
+                        const t0 = ast.lookupVariablePathType(p0, obj, env) catch unreachable;
+                        const t1 = ast.lookupVariablePathType(p1, obj, env) catch unreachable;
 
                         if (typechecker.isSubtype(t0, t1, env) catch unreachable) {
                             // t0 is subtype of t1
                             // so we use public members of t1
 
-                            const obj_next = typechecker.findObject(t1.object, env) catch unreachable;
+                            const obj_next = ast.findObject(t1.object, env) catch unreachable;
                             for (obj_next.public_parameters) |param| {
                                 var temp_arena: std.heap.ArenaAllocator = .init(s.allocator);
                                 defer temp_arena.deinit();
