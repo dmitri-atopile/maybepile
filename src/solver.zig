@@ -36,7 +36,14 @@ pub const Substitution = struct {
         self.allocator = parent_allocator;
         self.arena = .init(parent_allocator);
         self.map = .init(parent_allocator);
+        self.node = .{ .prev = null, .next = null };
 
+        return self;
+    }
+
+    pub fn create(parent_allocator: std.mem.Allocator) error{OutOfMemory}!*@This() {
+        const self = try parent_allocator.create(@This());
+        self.* = .init(parent_allocator);
         return self;
     }
 
@@ -44,12 +51,10 @@ pub const Substitution = struct {
         // so the only things allocated by the arena allocator are internally-held paths
         // the other allocator is just used for the hashmap itself
         // so we just keep a hashmap from path to pointer to the internal path
-        var new: @This() = undefined;
-
-        new.arena = .init(parent_allocator);
-        new.map = .init(parent_allocator);
+        var new: @This() = .init(parent_allocator);
 
         var new_allocated_paths: std.HashMap(ast.VariablePath, ast.VariablePath, VariablePathContext, std.hash_map.default_max_load_percentage) = .init(parent_allocator);
+        defer new_allocated_paths.deinit();
 
         var self_map_iterator = self.map.iterator();
         while (self_map_iterator.next()) |entry| {
@@ -76,7 +81,7 @@ pub const Substitution = struct {
             }
         }
 
-        new_allocated_paths.deinit();
+        // std.debug.print("{}\n", .{new});
 
         return new;
     }
@@ -223,11 +228,68 @@ pub const Substitution = struct {
 
 // substitution stream
 
-pub const SubstitutionStream = struct {
-    node: std.DoublyLinkedList,
+pub const SubstitutionStreamIterator = struct {
+    node: ?*std.DoublyLinkedList.Node,
 
+    pub fn next(self: *@This()) ?*Substitution {
+        if (self.node) |self_node| {
+            const s: *Substitution = @fieldParentPtr("node", self_node);
+            self.node = self_node.next;
+            return s;
+        } else {
+            return null;
+        }
+    }
 };
 
+pub const SubstitutionStream = struct {
+    list: std.DoublyLinkedList,
+
+    pub const init: @This() = .{ .list = .{ .first = null, .last = null } };
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        // all Substitutions in the stream are expected to have been allocated with the passed allocator
+
+        var self_it = self.iterator();
+        while (self_it.next()) |s| {
+            s.deinit();
+            allocator.destroy(s);
+        }
+
+        self.list.first = null;
+        self.list.last = null;
+    }
+
+    pub fn append(self: *@This(), s: *Substitution) void {
+        self.list.append(&s.node);
+    }
+
+    pub fn prepend(self: *@This(), s: *Substitution) void {
+        self.list.prepend(&s.node);
+    }
+
+    pub fn concat(self: *@This(), other: *@This()) void {
+        self.list.concatByMoving(&other.list);
+    }
+
+    pub fn iterator(self: *@This()) SubstitutionStreamIterator {
+        const it: SubstitutionStreamIterator = .{ .node = self.list.first };
+        return it;
+    }
+
+    pub fn dupe(self: *@This(), allocator: std.mem.Allocator) error{OutOfMemory}!@This() {
+        var new: @This() = .init;
+
+        var self_it = self.iterator();
+        while (self_it.next()) |s| {
+            const s_new: *Substitution = try allocator.create(Substitution);
+            s_new.* = try s.dupe(allocator);
+            new.append(s_new);
+        }
+
+        return new;
+    }
+};
 
 // tests
 
@@ -276,19 +338,18 @@ test "Substitution init,update,lookup,dupe" {
 }
 
 test "Substitution merge" {
-
     var s0: Substitution = .init(std.testing.allocator);
     defer s0.deinit();
 
     var s1: Substitution = .init(std.testing.allocator);
     defer s1.deinit();
 
-    try s0.update(&.{"a"}, .{.number = 5});
-    try s1.update(&.{"b"}, .{.number = 6});
+    try s0.update(&.{"a"}, .{ .number = 5 });
+    try s1.update(&.{"b"}, .{ .number = 6 });
 
     try s0.merge(s1);
 
-    try expect(ast.valuesEqual(try s0.lookup(&.{"b"}), .{.number = 6}));
+    try expect(ast.valuesEqual(try s0.lookup(&.{"b"}), .{ .number = 6 }));
 }
 
 test "Substitution unify" {
@@ -301,4 +362,37 @@ test "Substitution unify" {
     try expect(!try s.unify(.{ .path = &.{ "a", "b", "c" } }, .{ .number = 6.0 }, examples.f, examples.abcdef_program));
     try expect(try s.unify(.{ .path = &.{ "a", "b", "c" } }, .{ .path = &.{ "d", "e", "c" } }, examples.f, examples.abcdef_program));
     try expect(!try s.unify(.{ .number = 6.0 }, .{ .path = &.{ "d", "e", "c" } }, examples.f, examples.abcdef_program));
+}
+
+test "SubstitutionStream" {
+    const s0: *Substitution = try .create(std.testing.allocator);
+    const s1: *Substitution = try .create(std.testing.allocator);
+    const s2: *Substitution = try .create(std.testing.allocator);
+
+    var st0: SubstitutionStream = .init;
+    defer st0.deinit(std.testing.allocator);
+
+    st0.append(s1);
+    st0.prepend(s0);
+    st0.append(s2);
+
+    var st1 = try st0.dupe(std.testing.allocator);
+    defer st1.deinit(std.testing.allocator);
+
+    var st0_iter = st0.iterator();
+    try expectEqual(st0_iter.next(), s0);
+    try expectEqual(st0_iter.next(), s1);
+    try expectEqual(st0_iter.next(), s2);
+    try expect(st0_iter.next() == null);
+
+    st0.concat(&st1);
+
+    st0_iter = st0.iterator();
+    try expectEqual(st0_iter.next(), s0);
+    try expectEqual(st0_iter.next(), s1);
+    try expectEqual(st0_iter.next(), s2);
+    _ = st0_iter.next();
+    _ = st0_iter.next();
+    _ = st0_iter.next();
+    try expect(st0_iter.next() == null);
 }

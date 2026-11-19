@@ -4,7 +4,6 @@ const ast = @import("ast.zig");
 
 const TypeError = error{ NumberIsNotObject, VariablePathNotFound, ObjectNotFound, NonUnifyableTypes, UnmatchingTraitType, NonNumberType };
 
-
 pub fn isSubtype(t0: ast.Type, t1: ast.Type, env: ast.Program) TypeError!bool {
     if (ast.typesEqual(t0, t1)) {
         return true;

@@ -45,6 +45,11 @@ pub fn dupeVariablePath(allocator: std.mem.Allocator, vp: VariablePath) error{Ou
         new_vp[n] = try allocator.dupe(u8, v);
     }
 
+    // for (new_vp) |s| {
+    //     std.debug.print("{s}.", .{s});
+    // }
+    // std.debug.print("\n", .{});
+
     return new_vp;
 }
 
@@ -86,7 +91,7 @@ pub const Program = []const (Object);
 
 // helper functions
 
-const LookupError = error{VariablePathNotFound, NumberIsNotObject, ObjectNotFound};
+const LookupError = error{ VariablePathNotFound, NumberIsNotObject, ObjectNotFound };
 
 pub fn findObject(object_type: ObjectType, env: Program) LookupError!Object {
     for (env) |obj| {
