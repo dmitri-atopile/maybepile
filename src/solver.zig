@@ -204,8 +204,8 @@ pub const Substitution = struct {
                                 var temp_arena: std.heap.ArenaAllocator = .init(s.allocator);
                                 defer temp_arena.deinit();
 
-                                const p0_ext = try std.mem.concat(temp_arena.allocator(), []const u8, &.{ p0, &.{param.name} });
-                                const p1_ext = try std.mem.concat(temp_arena.allocator(), []const u8, &.{ p1, &.{param.name} });
+                                const p0_ext = try std.mem.concat(temp_arena.allocator(), ast.Variable, &.{ p0, &.{param.name} });
+                                const p1_ext = try std.mem.concat(temp_arena.allocator(), ast.Variable, &.{ p1, &.{param.name} });
                                 if (try s.unify(.{ .path = p0_ext }, .{ .path = p1_ext }, obj, env)) {
                                     continue;
                                 } else {
@@ -223,6 +223,54 @@ pub const Substitution = struct {
                 }
             },
         }
+    }
+
+    pub fn prependVariablePath(self: *@This(), v: ast.Variable) error{OutOfMemory}!void {
+        const own_v = try self.arena.allocator().dupe(u8, v);
+
+        // hashmap from old allocated path two new allocated path
+        var new_allocated_paths: std.HashMap(ast.VariablePath, ast.VariablePath, VariablePathContext, std.hash_map.default_max_load_percentage) = .init(self.allocator);
+
+        // new map with renamed values
+        // cannot modify default map in-place b/c invalidates iterator
+        var new_map: std.HashMap(ast.VariablePath, ast.Value, VariablePathContext, std.hash_map.default_max_load_percentage) = .init(self.allocator);
+
+        var it = self.map.iterator();
+        while (it.next()) |e| {
+            // internalize the new key
+            var new_key: ast.VariablePath = undefined;
+            if (new_allocated_paths.get(e.key_ptr.*)) |found_key_path| {
+                new_key = found_key_path;
+            } else {
+                new_key = try std.mem.concat(self.arena.allocator(), ast.Variable, &.{ &.{own_v}, e.key_ptr.* });
+                try new_allocated_paths.put(e.key_ptr.*, new_key);
+            }
+
+            // internalize the new value
+            var new_val: ast.Value = undefined;
+            switch (e.value_ptr.*) {
+                .number => new_val = e.value_ptr.*,
+                .path => |p| {
+                    if (new_allocated_paths.get(p)) |found_val_path| {
+                        new_val = .{.path = found_val_path};
+                    } else {
+                        const new_val_path = try std.mem.concat(self.arena.allocator(), ast.Variable, &.{ &.{own_v}, p });
+                        try new_allocated_paths.put(p, new_val_path);
+                        new_val = .{.path = new_val_path};
+
+                    }
+                }
+            }
+
+            // use the new paths
+            try new_map.put(new_key, new_val);
+            
+        }
+
+        // swap out the maps
+        self.map.deinit();
+        self.map = new_map;
+        
     }
 };
 
@@ -244,6 +292,8 @@ pub const SubstitutionStreamIterator = struct {
 
 pub const SubstitutionStream = struct {
     list: std.DoublyLinkedList,
+
+    // basic functionality
 
     pub const init: @This() = .{ .list = .{ .first = null, .last = null } };
 
@@ -289,7 +339,148 @@ pub const SubstitutionStream = struct {
 
         return new;
     }
+
+    pub fn merge(self: *@This(), other: *@This(), allocator: std.mem.Allocator) error{OutOfMemory}!void {
+
+        var new_st: @This() = .init;
+        
+        var self_it = self.iterator();
+        while (self_it.next()) |self_s| {
+            var other_it = other.iterator();
+            while (other_it.next()) |other_s| {
+                const new_s = try allocator.create(Substitution);
+                new_s.* = try self_s.dupe(allocator);
+                try new_s.*.merge(other_s.*);
+                new_st.append(new_s);
+            }
+        }
+        
+        self.deinit(allocator);
+        other.deinit(allocator);
+        
+        self.* = new_st;
+    }
+
+    pub fn prependVariablePath(self: *@This(), v: ast.Variable) error{OutOfMemory}!void {
+        
+        var self_it = self.iterator();
+        while (self_it.next()) |s| {
+            try s.prependVariablePath(v);
+        }
+    }
+
 };
+
+// implementing solver
+
+const SolverError = error{OutOfMemory, ObjectNotFound};
+
+fn constraintEquals(st: *SubstitutionStream, c: ast.Constraint, obj: ast.Object, env: ast.Program, allocator: std.mem.Allocator) SolverError!void {
+    const eqs = c.equals;
+
+    // track what should point to current node, and last node
+    var prev_next_ptr_ptr: *?*std.DoublyLinkedList.Node = &st.list.first;
+    var prev_node_ptr: ?*std.DoublyLinkedList.Node = null;
+
+    var it = st.iterator();
+    while (it.next()) |s| {
+        const unify_success = try s.unify(eqs[0], eqs[1], obj, env);
+
+        if (unify_success) {
+            prev_next_ptr_ptr.* = &s.node;
+            s.node.prev = prev_node_ptr;
+
+            prev_next_ptr_ptr = &s.node.next;
+            prev_node_ptr = &s.node;
+        } else {
+            s.deinit();
+            allocator.destroy(s);
+        }
+    }
+
+    st.list.last = prev_node_ptr;
+
+}
+
+fn applyConstraint(st: *SubstitutionStream, c: ast.Constraint, obj: ast.Object, env: ast.Program, allocator: std.mem.Allocator) SolverError!void {
+
+    switch (c) {
+        .equals => try constraintEquals(st, c, obj, env, allocator),
+    }
+
+}
+
+fn loadChildObject(st: *SubstitutionStream, name: ast.Variable, obj_type: ast.ObjectType, solutions: std.StringHashMap(SubstitutionStream), allocator: std.mem.Allocator) SolverError!void {
+
+    if (solutions.getPtr(obj_type)) |child_stream| {
+        try child_stream.prependVariablePath(name);
+        try st.merge(child_stream, allocator);
+    } else {
+        return SolverError.ObjectNotFound;
+    }
+
+}
+
+fn loadParameter(st: *SubstitutionStream, param: ast.Parameter, solutions: std.StringHashMap(SubstitutionStream), allocator: std.mem.Allocator) SolverError!void {
+    switch (param.type) {
+        .number => {},
+        .object => |ot| {
+            try loadChildObject(st, param.name, ot, solutions, allocator);
+        }
+    }
+
+}
+
+
+fn solveObject(obj: ast.Object, env: ast.Program, solutions: *std.StringHashMap(SubstitutionStream), allocator: std.mem.Allocator) SolverError!SubstitutionStream {
+
+    var stream: SubstitutionStream = .init;
+
+    // load child objects
+    for (obj.public_parameters) |param| {
+        try loadParameter(&stream, param, solutions.*, allocator);
+    }
+    for (obj.private_parameters) |param| {
+        try loadParameter(&stream, param, solutions.*, allocator);
+    }
+
+    // apply this object's constraints from list
+    for (obj.constraints) |c| {
+        try applyConstraint(&stream, c, obj, env, allocator);
+    }
+
+    // apply traits
+    var temp_allocator: std.heap.ArenaAllocator = .init(allocator);
+    defer temp_allocator.deinit();
+
+
+    for (obj.traits, 0..) |t, i| {
+        const trait_obj = ast.findObject(t, env) catch return SolverError.ObjectNotFound;
+
+        const trait_param_name = try std.fmt.allocPrint(temp_allocator.allocator(), "_{}", .{i});
+        try loadChildObject(&stream, trait_param_name, t, solutions.*, allocator);
+
+        for (trait_obj.public_parameters) |p| {
+            try constraintEquals(&stream, .{.equals = .{.{.path = &.{p.name} }, .{.path = &.{trait_param_name, p.name}}}}, obj, env, allocator);
+        }
+    }
+
+    return stream;
+    
+}
+
+pub fn solve(program: ast.Program, allocator: std.mem.Allocator) SolverError!std.StringHashMap(SubstitutionStream) {
+
+    var object_solutions: std.StringHashMap(SubstitutionStream) = .init(allocator);
+
+    for (program) |object| {
+        const solution = try solveObject(object, program, &object_solutions, allocator);
+        try object_solutions.put(object.name, solution);
+    }
+
+    return object_solutions;
+
+}
 
 // tests
 
@@ -395,4 +586,11 @@ test "SubstitutionStream" {
     _ = st0_iter.next();
     _ = st0_iter.next();
     try expect(st0_iter.next() == null);
+}
+
+test "Solver" {
+
+    _ = try solve(examples.junction_program, std.testing.allocator);
+
+
 }

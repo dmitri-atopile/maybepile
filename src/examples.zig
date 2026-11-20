@@ -4,6 +4,8 @@ const ast = @import("ast.zig");
 
 pub const junction: ast.Object = .{ .name = "Junction", .public_parameters = &.{}, .private_parameters = &.{}, .constraints = &.{}, .traits = &.{} };
 
+pub const junction_program = &.{junction};
+
 pub const resistor: ast.Object = .{ .name = "Resistor", .public_parameters = &.{ .{ .name = "0", .type = .{ .object = "Junction" } }, .{ .name = "1", .type = .{ .object = "Junction" } }, .{ .name = "resistance", .type = .{ .number = {} } } }, .private_parameters = &.{}, .constraints = &.{}, .traits = &.{} };
 
 pub const resistor_square: ast.Object = .{ .name = "ResistorSquare", .public_parameters = &.{ .{ .name = "0", .type = .{ .object = "Junction" } }, .{ .name = "1", .type = .{ .object = "Junction" } }, .{ .name = "2", .type = .{ .object = "Junction" } }, .{ .name = "3", .type = .{ .object = "Junction" } }, .{ .name = "resistance", .type = .{ .number = {} } } }, .private_parameters = &.{
